@@ -1,0 +1,74 @@
+const express = require("express");
+const upload = require("../middleware/upload");
+const { extractText } = require("../services/parser.service");
+const { extractSkills, generateSuggestions } = require("../services/openai.service");
+const { calculateScore } = require("../services/score.service");
+
+const router = express.Router();
+
+/**
+ * POST /api/match
+ * Handles resume upload and job description matching
+ */
+router.post("/", upload.single("resume"), async (req, res) => {
+  try {
+    console.log("--- New Match Request Received ---");
+
+    // 1️⃣ Validation
+    if (!req.file) {
+      console.error("❌ No file uploaded");
+      return res.status(400).json({ error: "Resume file is required" });
+    }
+
+    if (!req.body.jobDescription) {
+      console.error("❌ No job description provided");
+      return res.status(400).json({ error: "Job description is required" });
+    }
+
+    // 2️⃣ Extract text from resume
+    // We pass req.file because the service now handles the buffer internally
+    const resumeText = await extractText(req.file);
+    const jobDescription = req.body.jobDescription;
+
+    // DEBUG: Check if text extraction worked
+    console.log("📄 Resume Text Length:", resumeText.length);
+    if (resumeText.length === 0) {
+      throw new Error("Could not extract any text from the PDF. Is it a scanned image?");
+    }
+
+    // 3️⃣ Extract skills using OpenAI
+    console.log("🤖 Extracting skills via AI...");
+    const resumeSkills = await extractSkills(resumeText);
+    const jobSkills = await extractSkills(jobDescription);
+
+    console.log("✅ Resume Skills Found:", resumeSkills);
+    console.log("✅ Job Skills Found:", jobSkills);
+
+    // 4️⃣ Calculate match score
+    const result = calculateScore(resumeSkills, jobSkills);
+
+    // 5️⃣ Generate AI suggestions
+    const suggestions = await generateSuggestions(result.missingSkills);
+
+    // 6️⃣ Send final response to frontend
+    console.log("📊 Final Score:", result.score);
+    res.json({
+      matchScore: result.score,
+      matchedSkills: result.matchedSkills,
+      missingSkills: result.missingSkills,
+      suggestions
+    });
+
+  } catch (err) {
+    console.error("===== MATCH ROUTE ERROR =====");
+    console.error("Message:", err.message);
+    console.error("Stack:", err.stack);
+    console.error("============================");
+
+    return res.status(500).json({
+      error: err.message || "Failed to analyze resume"
+    });
+  }
+});
+
+module.exports = router;
